@@ -7,3 +7,6 @@ authors = ["Aleksey Ivanov <ialexxei@gmail.com>"]
 crate-type = ["cdylib"]
 
 [dependencies]
+cstr-macro = "0.1"
+janus-plugin = "0.4"
+lazy_static = "0.2"
