@@ -37,33 +37,42 @@ unsafe impl std::marker::Send for Message {}
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct RoomId(u64);
 
-// TODO: consider adding id to struct
 #[derive(Debug)]
 struct Room {
+    id: RoomId,
     caller: Option<Weak<Session>>,
     callee: Option<Weak<Session>>,
 }
 
 impl Room {
-    fn new() -> Room {
+    fn new(id: RoomId) -> Room {
         Room {
+            id,
             callee: None,
             caller: None,
         }
     }
 
-    fn is_new(room_id: RoomId) -> bool {
+    fn is_new(id: RoomId) -> bool {
         let rooms = ROOMS.read().unwrap();
-        !rooms.contains_key(&room_id)
+        !rooms.contains_key(&id)
     }
 
-    fn create(self, id: RoomId) {
+    fn create(this: Room) {
         let mut rooms = ROOMS.write().unwrap();
-        rooms.insert(id, Box::new(self));
+        rooms.insert(this.id, Box::new(this));
     }
 
     fn get_mut(rooms: &mut HashMap<RoomId, Box<Room>>, id: RoomId) -> &mut Box<Room> {
         rooms.get_mut(&id).unwrap()
+    }
+
+    fn all() -> RwLockReadGuard<'static, HashMap<RoomId, Box<Room>>> {
+        ROOMS.read().expect("Cannot lock ROOMS for read")
+    }
+
+    fn all_mut() -> RwLockWriteGuard<'static, HashMap<RoomId, Box<Room>>> {
+        ROOMS.write().expect("Cannot lock ROOMS for write")
     }
 
     fn add_member(&mut self, member: RoomMember) {
@@ -88,6 +97,23 @@ enum RoomMember<'a> {
 struct SessionState {
     room_id: Option<RoomId>,
     initiator: Option<bool>,
+}
+
+impl SessionState {
+    fn get(session: &Session) -> RwLockReadGuard<SessionState> {
+        // deref Arc, deref SessionWrapper
+        session.read().expect("Cannot lock session for read")
+    }
+
+    fn get_mut(session: &Session) -> RwLockWriteGuard<SessionState> {
+        session.write().expect("Cannot lock session for write")
+    }
+
+    fn get_room<'a>(&self, rooms: &'a HashMap<RoomId, Box<Room>>) -> &'a Box<Room> {
+        rooms
+            .get(&self.room_id.expect("Session state has no room id"))
+            .unwrap()
+    }
 }
 
 type Session = SessionWrapper<RwLock<SessionState>>;
@@ -253,7 +279,8 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
 
         match event {
             Event::Join { room_id, initiator } => {
-                let mut state = session.write().unwrap();
+                let mut state = SessionState::get_mut(&session);
+
                 match state.room_id {
                     Some(x) => println!("Session already has room_id set: {:?}", x),
                     None => state.room_id = Some(room_id),
@@ -272,51 +299,51 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
 
                 if initiator {
                     if is_new_room {
-                        println!("--> caller is joining new room #{:?}", room_id);
+                        let mut room = Room::new(room_id);
+                        println!("--> caller is joining new room: #{:?}", room);
 
-                        let mut room = Room::new();
                         room.add_member(RoomMember::Caller(&session));
-                        println!("room: {:?}", room);
-                        room.create(room_id);
+                        println!("--> room after adding caller: {:?}", room);
+
+                        Room::create(room);
                     } else {
-                        let mut rooms = get_rooms_mut();
+                        let mut rooms = Room::all_mut();
                         let room = Room::get_mut(&mut rooms, room_id);
 
-                        println!("--> caller is joining existing room #{:?}", room_id);
-                        println!("--> room: {:?}", room);
+                        println!("--> caller is joining existing room: {:?}", room);
 
                         room.add_member(RoomMember::Caller(&session));
-                        println!("--> room after: {:?}", room);
+                        println!("--> room after adding caller: {:?}", room);
                     }
                 } else {
                     if is_new_room {
-                        println!("--> callee is joining new room #{:?}", room_id);
+                        let mut room = Room::new(room_id);
+                        println!("--> callee is joining new room: #{:?}", room);
 
-                        let mut room = Room::new();
                         room.add_member(RoomMember::Callee(&session));
-                        println!("room: {:?}", room);
-                        room.create(room_id);
+                        println!("--> room after adding callee: {:?}", room);
+
+                        Room::create(room);
                     } else {
-                        let mut rooms = get_rooms_mut();
+                        let mut rooms = Room::all_mut();
                         let room = Room::get_mut(&mut rooms, room_id);
 
-                        println!("--> callee is joining existing room #{:?}", room_id);
-                        println!("--> room: {:?}", room);
+                        println!("--> callee is joining existing room: #{:?}", room);
 
                         room.add_member(RoomMember::Callee(&session));
-                        println!("--> room after: {:?}", room);
+                        println!("--> room after adding callee: {:?}", room);
                     }
                 }
             }
             jsep @ Event::Call { .. } => {
                 println!("--> handle call event");
 
-                println!("state: {:?}", get_current_state(&session));
+                let state = SessionState::get(&session);
+                println!("--> state: {:?}", state);
 
-                let rooms = get_rooms();
-                let room = get_current_room(&rooms, &session);
-
-                println!("room: {:?}", room);
+                let rooms = Room::all();
+                let room = state.get_room(&rooms);
+                println!("--> room: {:?}", room);
 
                 if let Some(ref caller) = room.callee {
                     let peer = caller.upgrade().unwrap();
@@ -328,12 +355,12 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
             jsep @ Event::Accept { .. } => {
                 println!("--> handle accept event");
 
-                println!("state: {:?}", get_current_state(&session));
+                let state = SessionState::get(&session);
+                println!("--> state: {:?}", state);
 
-                let rooms = get_rooms();
-                let room = get_current_room(&rooms, &session);
-
-                println!("room: {:?}", room);
+                let rooms = Room::all();
+                let room = state.get_room(&rooms);
+                println!("--> room: {:?}", room);
 
                 if let Some(ref caller) = room.caller {
                     let peer = caller.upgrade().unwrap();
@@ -345,11 +372,11 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
             candidate @ Event::Candidate { .. } => {
                 println!("--> handle candidate event");
 
-                let state = get_current_state(&session);
-                let rooms = get_rooms();
-                let room = get_current_room(&rooms, &session);
-
+                let state = SessionState::get(&session);
                 println!("--> state: {:?}", state);
+
+                let rooms = Room::all();
+                let room = state.get_room(&rooms);
                 println!("--> room: {:?}", room);
 
                 match state.initiator {
@@ -367,29 +394,6 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
             }
         }
     }
-}
-
-fn get_current_state(session: &Session) -> RwLockReadGuard<SessionState> {
-    // deref Arc, deref SessionWrapper
-    session.read().unwrap()
-}
-
-fn get_current_room<'a, 'b>(
-    rooms: &'a HashMap<RoomId, Box<Room>>,
-    session: &'b Session,
-) -> &'a Box<Room> {
-    let state = get_current_state(session);
-    rooms
-        .get(&state.room_id.expect("Session state has no room id"))
-        .unwrap()
-}
-
-fn get_rooms() -> RwLockReadGuard<'static, HashMap<RoomId, Box<Room>>> {
-    ROOMS.read().expect("Cannot lock ROOMS for read")
-}
-
-fn get_rooms_mut() -> RwLockWriteGuard<'static, HashMap<RoomId, Box<Room>>> {
-    ROOMS.write().expect("Cannot lock ROOMS for write")
 }
 
 fn relay_jsep(peer: &Session, transaction: *mut c_char, jsep: Event) {
