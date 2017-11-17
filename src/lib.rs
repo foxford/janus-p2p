@@ -27,7 +27,7 @@ static mut GATEWAY: Option<&PluginCallbacks> = None;
 
 #[derive(Debug)]
 struct Message {
-    handle: *mut PluginSession,
+    session: Weak<Session>,
     transaction: *mut c_char,
     message: Option<JanssonValue>,
     jsep: Option<JanssonValue>,
@@ -154,7 +154,15 @@ extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) 
     *(CHANNEL.lock().unwrap()) = Some(tx);
 
     std::thread::spawn(move || {
-        message_handler(rx);
+        janus::log(janus::LogLevel::Verb, "--> P2P Start handling thread");
+
+        for msg in rx.iter() {
+            janus::log(
+                janus::LogLevel::Verb,
+                &format!("Processing message: {:?}", msg),
+            );
+            handle_message_async(msg);
+        }
     });
 
     0
@@ -201,29 +209,33 @@ extern "C" fn handle_message(
 ) -> *mut RawPluginResult {
     janus::log(janus::LogLevel::Verb, "--> P2P handle_message");
 
-    janus::log(janus::LogLevel::Verb, "--> P2P acquiring transfer lock");
-    let mutex = CHANNEL.lock().unwrap();
-    let tx = mutex.as_ref().unwrap();
-    janus::log(janus::LogLevel::Verb, "--> P2P acquired transfer lock");
+    let result = match Session::from_ptr(handle) {
+        Ok(ref session) => {
+            let message = Message {
+                session: Arc::downgrade(session),
+                transaction: transaction,
+                message: unsafe { JanssonValue::new(message) },
+                jsep: unsafe { JanssonValue::new(jsep) },
+            };
 
-    let message = unsafe { JanssonValue::new(message) };
-    let jsep = unsafe { JanssonValue::new(jsep) };
+            let mutex = CHANNEL.lock().unwrap();
+            let tx = mutex.as_ref().unwrap();
 
-    let echo_message = Message {
-        handle: handle,
-        transaction: transaction,
-        message: message,
-        jsep: jsep,
+            janus::log(janus::LogLevel::Verb, "--> P2P sending message to channel");
+            tx.send(message).expect("Sending to channel has failed");
+
+            PluginResult::new(
+                PluginResultType::JANUS_PLUGIN_OK_WAIT,
+                std::ptr::null(),
+                None,
+            )
+        }
+        Err(_) => PluginResult::new(
+            PluginResultType::JANUS_PLUGIN_ERROR,
+            cstr!("No handle associated with session"),
+            None,
+        ),
     };
-    janus::log(janus::LogLevel::Verb, "--> P2P sending message to channel");
-    tx.send(echo_message)
-        .expect("Sending to channel has failed");
-
-    let result = PluginResult::new(
-        PluginResultType::JANUS_PLUGIN_OK_WAIT,
-        std::ptr::null(),
-        None,
-    );
     result.into_raw()
 }
 
@@ -255,28 +267,19 @@ extern "C" fn incoming_data(_handle: *mut PluginSession, _buf: *mut c_char, _len
 
 extern "C" fn slow_link(_handle: *mut PluginSession, _uplink: c_int, _video: c_int) {}
 
-fn message_handler(rx: mpsc::Receiver<Message>) {
-    janus::log(janus::LogLevel::Verb, "--> P2P Start handling thread");
+fn handle_message_async(msg: Message) {
+    let Message {
+        session,
+        transaction,
+        message,
+        ..
+    } = msg;
 
-    for msg in rx.iter() {
-        janus::log(
-            janus::LogLevel::Verb,
-            &format!("--> P2P message_handler, msg: {:?}", msg),
-        );
+    let message: JanssonValue = message.unwrap();
+    let event = jansson_into_event(message);
+    println!("\n--> got message: {:?}", event);
 
-        let Message {
-            handle,
-            transaction,
-            message,
-            ..
-        } = msg;
-
-        let message: JanssonValue = message.unwrap();
-        let event = jansson_into_event(message);
-        println!("\n--> got message: {:?}", event);
-
-        let session = Session::from_ptr(handle).unwrap();
-
+    if let Some(session) = session.upgrade() {
         match event {
             Event::Join { room_id, initiator } => {
                 let mut state = SessionState::get_mut(&session);
@@ -393,6 +396,11 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
                 }
             }
         }
+    } else {
+        janus::log(
+            janus::LogLevel::Warn,
+            "Got a message for destroyed session.",
+        );
     }
 }
 
