@@ -17,7 +17,7 @@ use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult,
 use janus::session::SessionWrapper;
 
 lazy_static! {
-    static ref CHANNEL: Mutex<Option<mpsc::Sender<Message>>> = Mutex::new(None);
+    static ref CHANNEL: Mutex<Option<mpsc::Sender<RawMessage>>> = Mutex::new(None);
     static ref SESSIONS: RwLock<Vec<Box<Arc<Session>>>> = RwLock::new(Vec::new());
     #[derive(Debug)]
     static ref ROOMS: RwLock<HashMap<RoomId, Box<Room>>> = RwLock::new(HashMap::new());
@@ -26,13 +26,13 @@ lazy_static! {
 static mut GATEWAY: Option<&PluginCallbacks> = None;
 
 #[derive(Debug)]
-struct Message {
+struct RawMessage {
     session: Weak<Session>,
     transaction: *mut c_char,
     message: Option<JanssonValue>,
     jsep: Option<JanssonValue>,
 }
-unsafe impl std::marker::Send for Message {}
+unsafe impl std::marker::Send for RawMessage {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 struct RoomId(u64);
@@ -211,7 +211,7 @@ extern "C" fn handle_message(
 
     let result = match Session::from_ptr(handle) {
         Ok(ref session) => {
-            let message = Message {
+            let message = RawMessage {
                 session: Arc::downgrade(session),
                 transaction: transaction,
                 message: unsafe { JanssonValue::new(message) },
@@ -267,8 +267,8 @@ extern "C" fn incoming_data(_handle: *mut PluginSession, _buf: *mut c_char, _len
 
 extern "C" fn slow_link(_handle: *mut PluginSession, _uplink: c_int, _video: c_int) {}
 
-fn handle_message_async(msg: Message) {
-    let Message {
+fn handle_message_async(msg: RawMessage) {
+    let RawMessage {
         session,
         transaction,
         message,
