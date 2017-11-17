@@ -9,6 +9,9 @@ extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
 
+mod messages;
+
+use messages::Event;
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_int};
 use std::sync::{mpsc, Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
@@ -35,7 +38,7 @@ struct RawMessage {
 unsafe impl std::marker::Send for RawMessage {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-struct RoomId(u64);
+pub struct RoomId(u64);
 
 #[derive(Debug)]
 struct Room {
@@ -117,30 +120,6 @@ impl SessionState {
 }
 
 type Session = SessionWrapper<RwLock<SessionState>>;
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase", tag = "event")]
-enum Event {
-    Join { room_id: RoomId, initiator: bool },
-    Call { jsep: JsepKind },
-    Accept { jsep: JsepKind },
-    Candidate { candidate: IceCandidate },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IceCandidate {
-    candidate: String,
-    sdp_mid: String,
-    sdp_m_line_index: u16,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase", tag = "type")]
-pub enum JsepKind {
-    Offer { sdp: String },
-    Answer { sdp: String },
-}
 
 extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) -> c_int {
     janus::log(janus::LogLevel::Verb, "--> P2P init");
@@ -276,7 +255,7 @@ fn handle_message_async(msg: RawMessage) {
     } = msg;
 
     let message: JanssonValue = message.unwrap();
-    let event = jansson_into_event(message);
+    let event = messages::parse(message);
     println!("\n--> got message: {:?}", event);
 
     if let Some(session) = session.upgrade() {
@@ -443,11 +422,6 @@ fn prepare_response(event: &Event) -> serde_json::Value {
 
 fn serde_into_jansson(value: serde_json::Value) -> JanssonValue {
     JanssonValue::from_str(&value.to_string(), janus::JanssonDecodingFlags::empty()).unwrap()
-}
-
-fn jansson_into_event(value: JanssonValue) -> Event {
-    let value_string: String = value.to_string(janus::JanssonEncodingFlags::empty());
-    serde_json::from_str(&value_string).unwrap()
 }
 
 fn acquire_gateway() -> &'static PluginCallbacks {
