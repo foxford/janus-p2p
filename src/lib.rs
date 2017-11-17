@@ -88,9 +88,9 @@ impl Room {
 }
 
 #[derive(Debug)]
-enum RoomMember<'a> {
-    Callee(&'a Arc<Session>),
-    Caller(&'a Arc<Session>),
+enum RoomMember {
+    Callee(Arc<Session>),
+    Caller(Arc<Session>),
 }
 
 #[derive(Debug)]
@@ -302,7 +302,7 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
                         let mut room = Room::new(room_id);
                         println!("--> caller is joining new room: #{:?}", room);
 
-                        room.add_member(RoomMember::Caller(&session));
+                        room.add_member(RoomMember::Caller(session.clone()));
                         println!("--> room after adding caller: {:?}", room);
 
                         Room::create(room);
@@ -312,7 +312,7 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
 
                         println!("--> caller is joining existing room: {:?}", room);
 
-                        room.add_member(RoomMember::Caller(&session));
+                        room.add_member(RoomMember::Caller(session.clone()));
                         println!("--> room after adding caller: {:?}", room);
                     }
                 } else {
@@ -320,7 +320,7 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
                         let mut room = Room::new(room_id);
                         println!("--> callee is joining new room: #{:?}", room);
 
-                        room.add_member(RoomMember::Callee(&session));
+                        room.add_member(RoomMember::Callee(session.clone()));
                         println!("--> room after adding callee: {:?}", room);
 
                         Room::create(room);
@@ -330,7 +330,7 @@ fn message_handler(rx: mpsc::Receiver<Message>) {
 
                         println!("--> callee is joining existing room: #{:?}", room);
 
-                        room.add_member(RoomMember::Callee(&session));
+                        room.add_member(RoomMember::Callee(session.clone()));
                         println!("--> room after adding callee: {:?}", room);
                     }
                 }
