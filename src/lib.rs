@@ -61,6 +61,10 @@ impl Room {
         !rooms.contains_key(&id)
     }
 
+    fn is_empty(&self) -> bool {
+        self.caller.is_none() && self.callee.is_none()
+    }
+
     fn create(this: Room) {
         let mut rooms = ROOMS.write().unwrap();
         rooms.insert(this.id, Box::new(this));
@@ -113,9 +117,7 @@ impl SessionState {
     }
 
     fn get_room<'a>(&self, rooms: &'a HashMap<RoomId, Box<Room>>) -> &'a Box<Room> {
-        rooms
-            .get(&self.room_id.expect("Session state has no room id"))
-            .unwrap()
+        rooms.get(&self.room_id.expect("Session state has no room id")).unwrap()
     }
 }
 
@@ -176,8 +178,41 @@ extern "C" fn query_session(_handle: *mut PluginSession) -> *mut RawJanssonValue
     std::ptr::null_mut()
 }
 
-extern "C" fn destroy_session(_handle: *mut PluginSession, _error: *mut c_int) {
+extern "C" fn destroy_session(handle: *mut PluginSession, _error: *mut c_int) {
     janus::log(janus::LogLevel::Verb, "--> P2P destroy_session");
+
+    let session = Session::from_ptr(handle).unwrap();
+    let state = SessionState::get(&session);
+
+    let mut rooms = Room::all_mut();
+    let room_id = state.room_id.unwrap();
+
+    let is_empty = {
+        let room = Room::get_mut(&mut rooms, room_id);
+
+        SESSIONS.write().unwrap().retain(|ref s| s.as_ptr() != handle);
+
+        match state.initiator {
+            Some(true) => room.caller = None,
+            Some(false) | None => room.callee = None,
+        }
+
+        room.is_empty()
+    };
+
+    if is_empty {
+        janus::log(
+            janus::LogLevel::Verb,
+            &format!("Room #{:?} is empty, removing it.", room_id),
+        );
+
+        rooms.remove(&room_id).expect("Room must be present in HashMap");
+    } else {
+        janus::log(
+            janus::LogLevel::Verb,
+            &format!("Room #{:?} is not empty yet.", room_id),
+        );
+    }
 }
 
 extern "C" fn handle_message(
@@ -328,7 +363,7 @@ fn handle_message_async(msg: RawMessage) {
                 println!("--> room: {:?}", room);
 
                 if let Some(ref caller) = room.callee {
-                    let peer = caller.upgrade().unwrap();
+                    let peer = caller.upgrade().expect("Caller has gone");
                     println!("--> callee: {:?}", peer);
                     println!("--> pushing offer to callee");
                     relay_jsep(&peer, transaction, jsep);
@@ -345,7 +380,7 @@ fn handle_message_async(msg: RawMessage) {
                 println!("--> room: {:?}", room);
 
                 if let Some(ref caller) = room.caller {
-                    let peer = caller.upgrade().unwrap();
+                    let peer = caller.upgrade().expect("Callee has gone");
                     println!("--> caller: {:?}", peer);
                     println!("--> pushing answer to caller");
                     relay_jsep(&peer, transaction, jsep);
@@ -394,7 +429,7 @@ fn relay_jsep(peer: &Session, transaction: *mut c_char, jsep: Event) {
         transaction,
         event.as_mut_ref(),
         std::ptr::null_mut(),
-    )).expect("Pushing event has failed");
+    )).expect("Pushing jsep has failed");
 }
 
 fn relay_ice_candidate(peer: &Session, transaction: *mut c_char, candidate: Event) {
@@ -408,7 +443,7 @@ fn relay_ice_candidate(peer: &Session, transaction: *mut c_char, candidate: Even
         transaction,
         event.as_mut_ref(),
         std::ptr::null_mut(),
-    )).expect("Pushing event has failed");
+    )).expect("Pushing ice has failed");
 }
 
 fn prepare_response(event: &Event) -> serde_json::Value {
