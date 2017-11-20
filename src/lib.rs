@@ -14,8 +14,9 @@ mod messages;
 use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult, PluginResultType,
             PluginSession, RawJanssonValue, RawPluginResult};
 use janus::session::SessionWrapper;
-use messages::Event;
+use messages::Response;
 use std::collections::HashMap;
+use std::error::Error;
 use std::os::raw::{c_char, c_int};
 use std::sync::{mpsc, Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 
@@ -101,7 +102,7 @@ enum RoomMember {
 }
 
 #[derive(Debug)]
-struct SessionState {
+pub struct SessionState {
     room_id: Option<RoomId>,
     initiator: Option<bool>,
 }
@@ -122,6 +123,7 @@ impl SessionState {
 }
 
 type Session = SessionWrapper<RwLock<SessionState>>;
+type MessageResult = Result<(), Box<Error>>;
 
 extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) -> c_int {
     janus::log(janus::LogLevel::Verb, "--> P2P init");
@@ -142,7 +144,12 @@ extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) 
                 janus::LogLevel::Verb,
                 &format!("Processing message: {:?}", msg),
             );
-            handle_message_async(msg);
+            handle_message_async(msg).err().map(|e| {
+                janus::log(
+                    janus::LogLevel::Err,
+                    &format!("Error processing message: {}", e),
+                );
+            });
         }
     });
 
@@ -281,7 +288,7 @@ extern "C" fn incoming_data(_handle: *mut PluginSession, _buf: *mut c_char, _len
 
 extern "C" fn slow_link(_handle: *mut PluginSession, _uplink: c_int, _video: c_int) {}
 
-fn handle_message_async(msg: RawMessage) {
+fn handle_message_async(msg: RawMessage) -> MessageResult {
     let RawMessage {
         session,
         transaction,
@@ -289,172 +296,67 @@ fn handle_message_async(msg: RawMessage) {
         ..
     } = msg;
 
-    let message: JanssonValue = message.unwrap();
-    let event = messages::parse(message);
-    println!("\n--> got message: {:?}", event);
-
     if let Some(session) = session.upgrade() {
-        match event {
-            Event::Join { room_id, initiator } => {
-                let mut state = SessionState::get_mut(&session);
+        // TODO: can message be None?
+        let message: JanssonValue = message.unwrap();
 
-                match state.room_id {
-                    Some(x) => println!("Session already has room_id set: {:?}", x),
-                    None => state.room_id = Some(room_id),
-                }
-                match state.initiator {
-                    Some(x) => println!("Session already has initiator set: {:?}", x),
-                    None => state.initiator = Some(initiator),
-                }
-
-                // {
-                //     let rooms = ROOMS.read().unwrap();
-                //     println!("--> rooms before: {:?}", *rooms);
-                // }
-
-                let is_new_room = Room::is_new(room_id);
-
-                if initiator {
-                    if is_new_room {
-                        let mut room = Room::new(room_id);
-                        println!("--> caller is joining new room: #{:?}", room);
-
-                        room.add_member(RoomMember::Caller(session.clone()));
-                        println!("--> room after adding caller: {:?}", room);
-
-                        Room::create(room);
-                    } else {
-                        let mut rooms = Room::all_mut();
-                        let room = Room::get_mut(&mut rooms, room_id);
-
-                        println!("--> caller is joining existing room: {:?}", room);
-
-                        room.add_member(RoomMember::Caller(session.clone()));
-                        println!("--> room after adding caller: {:?}", room);
-                    }
-                } else {
-                    if is_new_room {
-                        let mut room = Room::new(room_id);
-                        println!("--> callee is joining new room: #{:?}", room);
-
-                        room.add_member(RoomMember::Callee(session.clone()));
-                        println!("--> room after adding callee: {:?}", room);
-
-                        Room::create(room);
-                    } else {
-                        let mut rooms = Room::all_mut();
-                        let room = Room::get_mut(&mut rooms, room_id);
-
-                        println!("--> callee is joining existing room: #{:?}", room);
-
-                        room.add_member(RoomMember::Callee(session.clone()));
-                        println!("--> room after adding callee: {:?}", room);
-                    }
-                }
-            }
-            jsep @ Event::Call { .. } => {
-                println!("--> handle call event");
-
-                let state = SessionState::get(&session);
-                println!("--> state: {:?}", state);
-
-                let rooms = Room::all();
-                let room = state.get_room(&rooms);
-                println!("--> room: {:?}", room);
-
-                if let Some(ref caller) = room.callee {
-                    let peer = caller.upgrade().expect("Caller has gone");
-                    println!("--> callee: {:?}", peer);
-                    println!("--> pushing offer to callee");
-                    relay_jsep(&peer, transaction, jsep);
-                }
-            }
-            jsep @ Event::Accept { .. } => {
-                println!("--> handle accept event");
-
-                let state = SessionState::get(&session);
-                println!("--> state: {:?}", state);
-
-                let rooms = Room::all();
-                let room = state.get_room(&rooms);
-                println!("--> room: {:?}", room);
-
-                if let Some(ref caller) = room.caller {
-                    let peer = caller.upgrade().expect("Callee has gone");
-                    println!("--> caller: {:?}", peer);
-                    println!("--> pushing answer to caller");
-                    relay_jsep(&peer, transaction, jsep);
-                }
-            }
-            candidate @ Event::Candidate { .. } => {
-                println!("--> handle candidate event");
-
-                let state = SessionState::get(&session);
-                println!("--> state: {:?}", state);
-
-                let rooms = Room::all();
-                let room = state.get_room(&rooms);
-                println!("--> room: {:?}", room);
-
-                match state.initiator {
-                    Some(true) => if let Some(ref x) = room.callee {
-                        let peer = x.upgrade().unwrap();
-                        println!("-->> pushing ICE to callee");
-                        relay_ice_candidate(&peer, transaction, candidate);
-                    },
-                    Some(false) | None => if let Some(ref x) = room.caller {
-                        let peer = x.upgrade().unwrap();
-                        println!("-->> pushing ICE to caller");
-                        relay_ice_candidate(&peer, transaction, candidate);
+        match messages::process(&session, message) {
+            Ok(resp) => {
+                println!("--> Got response: {:?}", resp);
+                match resp {
+                    Response::Join { peer, mut payload }
+                    | Response::Call { peer, mut payload }
+                    | Response::Accept { peer, mut payload }
+                    | Response::Candidate { peer, mut payload } => match peer.upgrade() {
+                        Some(peer) => {
+                            {
+                                let json_obj = payload.as_object_mut().unwrap();
+                                json_obj.entry("ok").or_insert(json!(true));
+                            }
+                            push_response(&peer, transaction, payload)
+                        }
+                        None => Err(messages::Error::PeerHasGone)?,
                     },
                 }
+            }
+            Err(err) => {
+                janus::log(
+                    janus::LogLevel::Err,
+                    &format!("Error processing message: {}", err),
+                );
+                push_response(
+                    &session,
+                    transaction,
+                    json!({ "ok": false, "error": err.description() }),
+                )
             }
         }
     } else {
-        janus::log(
+        Ok(janus::log(
             janus::LogLevel::Warn,
             "Got a message for destroyed session.",
-        );
+        ))
     }
 }
 
-fn relay_jsep(peer: &Session, transaction: *mut c_char, jsep: Event) {
-    let json = prepare_response(&jsep);
+fn push_response(
+    peer: &Session,
+    transaction: *mut c_char,
+    json: serde_json::Value,
+) -> MessageResult {
     let event = serde_into_jansson(json);
 
     let push_event_fn = acquire_gateway().push_event;
-    janus::get_result(push_event_fn(
+    Ok(janus::get_result(push_event_fn(
         peer.handle,
         &mut PLUGIN,
         transaction,
         event.as_mut_ref(),
         std::ptr::null_mut(),
-    )).expect("Pushing jsep has failed");
+    ))?)
 }
 
-fn relay_ice_candidate(peer: &Session, transaction: *mut c_char, candidate: Event) {
-    let json = prepare_response(&candidate);
-    let event = serde_into_jansson(json);
-
-    let push_event_fn = acquire_gateway().push_event;
-    janus::get_result(push_event_fn(
-        peer.handle,
-        &mut PLUGIN,
-        transaction,
-        event.as_mut_ref(),
-        std::ptr::null_mut(),
-    )).expect("Pushing ice has failed");
-}
-
-fn prepare_response(event: &Event) -> serde_json::Value {
-    let mut event_json = json!(event);
-    {
-        let json_obj = event_json.as_object_mut().unwrap();
-        json_obj.entry("result").or_insert(json!("ok"));
-    }
-    event_json
-}
-
+// TODO: can we pass value by reference?
 fn serde_into_jansson(value: serde_json::Value) -> JanssonValue {
     JanssonValue::from_str(&value.to_string(), janus::JanssonDecodingFlags::empty()).unwrap()
 }
