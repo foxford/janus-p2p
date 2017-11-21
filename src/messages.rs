@@ -122,11 +122,10 @@ pub fn process(
                     println!("--> room after adding caller: {:?}", room);
                 }
 
-                let resp = Response::Join {
+                Ok(Response::Join {
                     peer: Arc::downgrade(session),
                     payload: json!({ "result": "join", "full": false, "you": "caller" }),
-                };
-                Ok(resp)
+                })
             } else {
                 let callee = session.clone();
 
@@ -148,11 +147,10 @@ pub fn process(
                     println!("--> room after adding callee: {:?}", room);
                 }
 
-                let resp = Response::Join {
+                Ok(Response::Join {
                     peer: Arc::downgrade(session),
                     payload: json!({ "result": "join", "full": false, "you": "callee" }),
-                };
-                Ok(resp)
+                })
             }
         }
         jsep @ Event::Call { .. } => {
@@ -165,15 +163,12 @@ pub fn process(
             let room = state.get_room(&rooms);
             println!("--> room: {:?}", room);
 
-            if let Some(ref callee) = room.callee {
-                let resp = Response::Call {
-                    peer: callee.clone(),
+            room.callee.clone().ok_or(Error::EmptyPeer.into()).and_then(|p| {
+                Ok(Response::Call {
+                    peer: p,
                     payload: json!(jsep),
-                };
-                Ok(resp)
-            } else {
-                Err(Error::EmptyPeer)?
-            }
+                })
+            })
         }
         jsep @ Event::Accept { .. } => {
             println!("--> handle accept event");
@@ -185,15 +180,12 @@ pub fn process(
             let room = state.get_room(&rooms);
             println!("--> room: {:?}", room);
 
-            if let Some(ref caller) = room.caller {
-                let resp = Response::Accept {
-                    peer: caller.clone(),
+            room.caller.clone().ok_or(Error::EmptyPeer.into()).and_then(|p| {
+                Ok(Response::Accept {
+                    peer: p,
                     payload: json!(jsep),
-                };
-                Ok(resp)
-            } else {
-                Err(Error::EmptyPeer)?
-            }
+                })
+            })
         }
         candidate @ Event::Candidate { .. } => {
             println!("--> handle candidate event");
@@ -205,26 +197,17 @@ pub fn process(
             let room = state.get_room(&rooms);
             println!("--> room: {:?}", room);
 
-            match state.initiator {
-                Some(true) => if let Some(ref x) = room.callee {
-                    let resp = Response::Candidate {
-                        peer: x.clone(),
-                        payload: json!(candidate),
-                    };
-                    Ok(resp)
-                } else {
-                    Err(Error::EmptyPeer)?
-                },
-                Some(false) | None => if let Some(ref x) = room.caller {
-                    let resp = Response::Candidate {
-                        peer: x.clone(),
-                        payload: json!(candidate),
-                    };
-                    Ok(resp)
-                } else {
-                    Err(Error::EmptyPeer)?
-                },
-            }
+            let peer: Option<Weak<Session>> = match state.initiator {
+                Some(true) => room.callee.clone(),
+                Some(false) | None => room.caller.clone(),
+            };
+
+            peer.ok_or(Error::EmptyPeer.into()).and_then(|p| {
+                Ok(Response::Candidate {
+                    peer: p,
+                    payload: json!(candidate),
+                })
+            })
         }
     }
 }
