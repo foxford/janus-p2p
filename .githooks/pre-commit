@@ -1,0 +1,17 @@
+#!/bin/sh
+
+echo "Running pre-commit hook...\n"
+
+printf "Checking code formatting..."
+cargo fmt -- --write-mode=diff > /dev/null
+fmt_result=$?
+
+if [ $fmt_result -eq 0 ]; then
+  echo " OK"
+else
+  echo " FAIL"
+  echo "Consider using rustfmt tool to format the code."
+fi
+echo ""
+
+exit $fmt_result
