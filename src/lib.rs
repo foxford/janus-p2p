@@ -11,13 +11,13 @@ extern crate serde_json;
 
 mod messages;
 
+use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult, PluginResultType,
+            PluginSession, RawJanssonValue, RawPluginResult};
+use janus::session::SessionWrapper;
 use messages::Event;
 use std::collections::HashMap;
 use std::os::raw::{c_char, c_int};
 use std::sync::{mpsc, Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
-use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult, PluginResultType,
-            PluginSession, RawJanssonValue, RawPluginResult};
-use janus::session::SessionWrapper;
 
 lazy_static! {
     static ref CHANNEL: Mutex<Option<mpsc::Sender<RawMessage>>> = Mutex::new(None);
