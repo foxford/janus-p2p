@@ -1,0 +1,15 @@
+language: rust
+rust:
+  - nightly
+cache: cargo
+before_script:
+  - sudo apt-get -qq update
+  - sudo apt-get install -y libjansson-dev
+  - export PATH="$PATH:$HOME/.cargo/bin"
+  - which rustfmt || cargo install rustfmt-nightly
+script:
+  - cargo fmt -- --write-mode=diff
+  - cargo build
+  - cargo test
+notifications:
+  email: false
