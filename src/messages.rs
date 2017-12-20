@@ -124,7 +124,7 @@ pub fn process(
 
                 Ok(Response::Join {
                     peer: Arc::downgrade(session),
-                    payload: json!({ "result": "join", "full": false, "you": "caller" }),
+                    payload: json!({ "event": "join", "full": false, "you": "caller" }),
                 })
             } else {
                 let callee = session.clone();
@@ -149,7 +149,7 @@ pub fn process(
 
                 Ok(Response::Join {
                     peer: Arc::downgrade(session),
-                    payload: json!({ "result": "join", "full": false, "you": "callee" }),
+                    payload: json!({ "event": "join", "full": false, "you": "callee" }),
                 })
             }
         }
