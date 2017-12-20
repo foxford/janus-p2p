@@ -1,0 +1,25 @@
+sequenceDiagram
+    participant A as Caller
+    participant J as Janus
+    participant B as Callee
+
+    A->>J: Join: { room_id: 1, initiator: true }
+    J->>A: Join: { full: false, ok: true, you: "caller" }
+    B->>J: Join: { room_id: 1, initiator: false }
+    J->>B: Join: { full: true, ok: true, you: "callee" }
+
+    Note over J: Relaying messages
+
+    A->>J: Call: { jsep: { type: "offer", sdp: "..." } }
+    J->>B: Call: { jsep: { type: "offer", sdp: "..." } }
+
+    A->>J: Candidate: { candidate: { ... } }
+    J->>B: Candidate: { candidate: { ... } }
+    A->>J: Candidate: { candidate: { ... } }
+    J->>B: Candidate: { candidate: { ... } }
+
+    B->>J: Accept: { jsep: { type: "answer", sdp: "..." } }
+    J->>A: Accept: { jsep: { type: "answer", sdp: "..." } }
+
+    B->>J: Candidate: { candidate: { ... } }
+    J->>A: Candidate: { candidate: { ... } }
