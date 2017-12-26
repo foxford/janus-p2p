@@ -1,6 +1,4 @@
 #[macro_use]
-extern crate cstr_macro;
-#[macro_use]
 extern crate janus_plugin as janus;
 #[macro_use]
 extern crate lazy_static;
@@ -11,14 +9,22 @@ extern crate serde_json;
 
 mod messages;
 
-use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult, PluginResultType,
-            PluginSession, RawJanssonValue, RawPluginResult};
+use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult, PluginSession,
+            RawJanssonValue, RawPluginResult};
 use janus::session::SessionWrapper;
 use messages::Response;
 use std::collections::HashMap;
 use std::error::Error;
 use std::os::raw::{c_char, c_int};
 use std::sync::{mpsc, Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
+
+macro_rules! c_str {
+    ($lit:expr) => {
+        unsafe {
+            ::std::ffi::CStr::from_ptr(concat!($lit, "\0").as_ptr() as *const ::std::os::raw::c_char)
+        }
+    }
+}
 
 lazy_static! {
     static ref CHANNEL: Mutex<Option<mpsc::Sender<RawMessage>>> = Mutex::new(None);
@@ -118,7 +124,9 @@ impl SessionState {
     }
 
     fn get_room<'a>(&self, rooms: &'a HashMap<RoomId, Box<Room>>) -> &'a Box<Room> {
-        rooms.get(&self.room_id.expect("Session state has no room id")).unwrap()
+        rooms
+            .get(&self.room_id.expect("Session state has no room id"))
+            .unwrap()
     }
 }
 
@@ -126,7 +134,7 @@ type Session = SessionWrapper<RwLock<SessionState>>;
 type MessageResult = Result<(), Box<Error>>;
 
 extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) -> c_int {
-    janus::log(janus::LogLevel::Verb, "--> P2P init");
+    janus_verb!("--> P2P init");
 
     unsafe {
         let callback = callback.as_ref().unwrap();
@@ -137,18 +145,12 @@ extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) 
     *(CHANNEL.lock().unwrap()) = Some(tx);
 
     std::thread::spawn(move || {
-        janus::log(janus::LogLevel::Verb, "--> P2P Start handling thread");
+        janus_verb!("--> P2P Start handling thread");
 
         for msg in rx.iter() {
-            janus::log(
-                janus::LogLevel::Verb,
-                &format!("Processing message: {:?}", msg),
-            );
+            janus_verb!("Processing message: {:?}", msg);
             handle_message_async(msg).err().map(|e| {
-                janus::log(
-                    janus::LogLevel::Err,
-                    &format!("Error processing message: {}", e),
-                );
+                janus_err!("Error processing message: {}", e);
             });
         }
     });
@@ -157,7 +159,7 @@ extern "C" fn init(callback: *mut PluginCallbacks, _config_path: *const c_char) 
 }
 
 extern "C" fn destroy() {
-    janus::log(janus::LogLevel::Verb, "--> P2P destroy");
+    janus_verb!("--> P2P destroy");
 }
 
 extern "C" fn create_session(handle: *mut PluginSession, error: *mut c_int) {
@@ -165,30 +167,27 @@ extern "C" fn create_session(handle: *mut PluginSession, error: *mut c_int) {
         room_id: None,
         initiator: None,
     };
-    match Session::associate(handle, RwLock::new(state)) {
+    match unsafe { Session::associate(handle, RwLock::new(state)) } {
         Ok(session) => {
-            janus::log(
-                janus::LogLevel::Info,
-                &format!("Initializing P2P session {:?}", session),
-            );
+            janus_info!("Initializing P2P session {:?}", session);
             SESSIONS.write().unwrap().push(session);
         }
         Err(e) => {
-            janus::log(janus::LogLevel::Err, &format!("{}", e));
+            janus_err!("{}", e);
             unsafe { *error = -1 };
         }
     }
 }
 
 extern "C" fn query_session(_handle: *mut PluginSession) -> *mut RawJanssonValue {
-    janus::log(janus::LogLevel::Verb, "--> P2P query_session");
+    janus_verb!("--> P2P query_session");
     std::ptr::null_mut()
 }
 
 extern "C" fn destroy_session(handle: *mut PluginSession, _error: *mut c_int) {
-    janus::log(janus::LogLevel::Verb, "--> P2P destroy_session");
+    janus_verb!("--> P2P destroy_session");
 
-    let session = Session::from_ptr(handle).unwrap();
+    let session = unsafe { Session::from_ptr(handle) }.unwrap();
     let state = SessionState::get(&session);
 
     let mut rooms = Room::all_mut();
@@ -197,7 +196,10 @@ extern "C" fn destroy_session(handle: *mut PluginSession, _error: *mut c_int) {
     let is_empty = {
         let room = Room::get_mut(&mut rooms, room_id);
 
-        SESSIONS.write().unwrap().retain(|ref s| s.as_ptr() != handle);
+        SESSIONS
+            .write()
+            .unwrap()
+            .retain(|ref s| s.as_ptr() != handle);
 
         match state.initiator {
             Some(true) => room.caller = None,
@@ -208,17 +210,12 @@ extern "C" fn destroy_session(handle: *mut PluginSession, _error: *mut c_int) {
     };
 
     if is_empty {
-        janus::log(
-            janus::LogLevel::Verb,
-            &format!("Room #{:?} is empty, removing it.", room_id),
-        );
-
-        rooms.remove(&room_id).expect("Room must be present in HashMap");
+        janus_verb!("Room #{:?} is empty, removing it.", room_id);
+        rooms
+            .remove(&room_id)
+            .expect("Room must be present in HashMap");
     } else {
-        janus::log(
-            janus::LogLevel::Verb,
-            &format!("Room #{:?} is not empty yet.", room_id),
-        );
+        janus_verb!("Room #{:?} is not empty yet.", room_id);
     }
 }
 
@@ -228,9 +225,9 @@ extern "C" fn handle_message(
     message: *mut RawJanssonValue,
     jsep: *mut RawJanssonValue,
 ) -> *mut RawPluginResult {
-    janus::log(janus::LogLevel::Verb, "--> P2P handle_message");
+    janus_verb!("--> P2P handle_message");
 
-    let result = match Session::from_ptr(handle) {
+    let result = match unsafe { Session::from_ptr(handle) } {
         Ok(ref session) => {
             let message = RawMessage {
                 session: Arc::downgrade(session),
@@ -242,30 +239,22 @@ extern "C" fn handle_message(
             let mutex = CHANNEL.lock().unwrap();
             let tx = mutex.as_ref().unwrap();
 
-            janus::log(janus::LogLevel::Verb, "--> P2P sending message to channel");
+            janus_verb!("--> P2P sending message to channel");
             tx.send(message).expect("Sending to channel has failed");
 
-            PluginResult::new(
-                PluginResultType::JANUS_PLUGIN_OK_WAIT,
-                std::ptr::null(),
-                None,
-            )
+            PluginResult::ok_wait(None)
         }
-        Err(_) => PluginResult::new(
-            PluginResultType::JANUS_PLUGIN_ERROR,
-            cstr!("No handle associated with session"),
-            None,
-        ),
+        Err(_) => PluginResult::error(c_str!("No handle associated with session")),
     };
     result.into_raw()
 }
 
 extern "C" fn setup_media(_handle: *mut PluginSession) {
-    janus::log(janus::LogLevel::Verb, "--> P2P setup_media");
+    janus_verb!("--> P2P setup_media");
 }
 
 extern "C" fn hangup_media(_handle: *mut PluginSession) {
-    janus::log(janus::LogLevel::Verb, "--> P2P hangup_media");
+    janus_verb!("--> P2P hangup_media");
 }
 
 extern "C" fn incoming_rtp(
@@ -320,10 +309,7 @@ fn handle_message_async(msg: RawMessage) -> MessageResult {
                 }
             }
             Err(err) => {
-                janus::log(
-                    janus::LogLevel::Err,
-                    &format!("Error processing message: {}", err),
-                );
+                janus_err!("Error processing message: {}", err);
                 push_response(
                     &session,
                     transaction,
@@ -332,10 +318,7 @@ fn handle_message_async(msg: RawMessage) -> MessageResult {
             }
         }
     } else {
-        Ok(janus::log(
-            janus::LogLevel::Warn,
-            "Got a message for destroyed session.",
-        ))
+        Ok(janus_warn!("Got a message for destroyed session."))
     }
 }
 
@@ -344,7 +327,7 @@ fn push_response(
     transaction: *mut c_char,
     json: serde_json::Value,
 ) -> MessageResult {
-    let event = serde_into_jansson(json);
+    let mut event = serde_into_jansson(json);
 
     let push_event_fn = acquire_gateway().push_event;
     Ok(janus::get_result(push_event_fn(
@@ -365,17 +348,15 @@ fn acquire_gateway() -> &'static PluginCallbacks {
     unsafe { GATEWAY }.expect("Gateway is NONE")
 }
 
-const METADATA: PluginMetadata = PluginMetadata {
-    version: 1,
-    version_str: cstr!("0.1"),
-    description: cstr!("P2P plugin"),
-    name: cstr!("P2P plugin"),
-    author: cstr!("Aleksey Ivanov"),
-    package: cstr!("janus.plugin.p2p"),
-};
-
 const PLUGIN: Plugin = build_plugin!(
-    METADATA,
+    PluginMetadata {
+        version: 1,
+        version_str: c_str!("0.1"),
+        description: c_str!("P2P plugin"),
+        name: c_str!("P2P plugin"),
+        author: c_str!("Aleksey Ivanov"),
+        package: c_str!("janus.plugin.p2p"),
+    },
     init,
     destroy,
     create_session,
