@@ -9,8 +9,8 @@ extern crate serde_json;
 
 mod messages;
 
-use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult,
-            PluginSession, RawJanssonValue, RawPluginResult};
+use janus::{JanssonValue, Plugin, PluginCallbacks, PluginMetadata, PluginResult, PluginSession,
+            RawJanssonValue, RawPluginResult};
 use janus::session::SessionWrapper;
 use messages::Response;
 use std::collections::HashMap;
@@ -124,7 +124,9 @@ impl SessionState {
     }
 
     fn get_room<'a>(&self, rooms: &'a HashMap<RoomId, Box<Room>>) -> &'a Box<Room> {
-        rooms.get(&self.room_id.expect("Session state has no room id")).unwrap()
+        rooms
+            .get(&self.room_id.expect("Session state has no room id"))
+            .unwrap()
     }
 }
 
@@ -194,7 +196,10 @@ extern "C" fn destroy_session(handle: *mut PluginSession, _error: *mut c_int) {
     let is_empty = {
         let room = Room::get_mut(&mut rooms, room_id);
 
-        SESSIONS.write().unwrap().retain(|ref s| s.as_ptr() != handle);
+        SESSIONS
+            .write()
+            .unwrap()
+            .retain(|ref s| s.as_ptr() != handle);
 
         match state.initiator {
             Some(true) => room.caller = None,
@@ -206,7 +211,9 @@ extern "C" fn destroy_session(handle: *mut PluginSession, _error: *mut c_int) {
 
     if is_empty {
         janus_verb!("Room #{:?} is empty, removing it.", room_id);
-        rooms.remove(&room_id).expect("Room must be present in HashMap");
+        rooms
+            .remove(&room_id)
+            .expect("Room must be present in HashMap");
     } else {
         janus_verb!("Room #{:?} is not empty yet.", room_id);
     }
@@ -237,7 +244,7 @@ extern "C" fn handle_message(
 
             PluginResult::ok_wait(None)
         }
-        Err(_) => PluginResult::error(c_str!("No handle associated with session"))
+        Err(_) => PluginResult::error(c_str!("No handle associated with session")),
     };
     result.into_raw()
 }

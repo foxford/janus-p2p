@@ -163,12 +163,15 @@ pub fn process(
             let room = state.get_room(&rooms);
             println!("--> room: {:?}", room);
 
-            room.callee.clone().ok_or(Error::EmptyPeer.into()).and_then(|p| {
-                Ok(Response::Call {
-                    peer: p,
-                    payload: json!(jsep),
+            room.callee
+                .clone()
+                .ok_or(Error::EmptyPeer.into())
+                .and_then(|p| {
+                    Ok(Response::Call {
+                        peer: p,
+                        payload: json!(jsep),
+                    })
                 })
-            })
         }
         jsep @ Event::Accept { .. } => {
             println!("--> handle accept event");
@@ -180,12 +183,15 @@ pub fn process(
             let room = state.get_room(&rooms);
             println!("--> room: {:?}", room);
 
-            room.caller.clone().ok_or(Error::EmptyPeer.into()).and_then(|p| {
-                Ok(Response::Accept {
-                    peer: p,
-                    payload: json!(jsep),
+            room.caller
+                .clone()
+                .ok_or(Error::EmptyPeer.into())
+                .and_then(|p| {
+                    Ok(Response::Accept {
+                        peer: p,
+                        payload: json!(jsep),
+                    })
                 })
-            })
         }
         candidate @ Event::Candidate { .. } => {
             println!("--> handle candidate event");
